@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag_qa_system}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag_network
+
+  # FastAPI Backend
+  api:
+    build: .
+    container_name: rag_api
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-rag_qa_system}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
+      - MAX_TOKENS=${MAX_TOKENS:-500}
+      - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
+      - TOP_K_RESULTS=${TOP_K_RESULTS:-5}
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - api_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rag_network
+    restart: unless-stopped
+
+  # Streamlit Frontend
+  streamlit:
+    build: .
+    container_name: rag_streamlit
+    command: streamlit run src/ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    environment:
+      - API_BASE_URL=http://api:8000/api/v1
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      - api
+    networks:
+      - rag_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  api_cache:
+
+networks:
+  rag_network:
+    driver: bridge
